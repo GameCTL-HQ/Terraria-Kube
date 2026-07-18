@@ -21,6 +21,9 @@ permissions:
 
 env:
   IMAGE: ghcr.io/gamectl-hq/terraria-kube
+  # Known-good baseline (1.4.5.6). The resolve step probes upward from here for
+  # newer server zips, so this only needs a manual bump across big jumps.
+  BASELINE: '1456'
 
 jobs:
   build:
@@ -33,11 +36,20 @@ jobs:
         run: |
           ver="${{ github.event.inputs.terraria_version }}"
           if [ -z "$ver" ]; then
-            # The download page links terraria-server-<ver>.zip; take the highest.
-            ver="$(curl -fsSL https://terraria.org/ | grep -oE 'terraria-server-[0-9]+\.zip' \
-                   | grep -oE '[0-9]+' | sort -n | tail -1)"
+            # terraria.org has no version API (the site is JS-rendered), but the
+            # server zip URL 200s for every released version and version digits
+            # concatenate (1.4.5.6 -> 1456). Probe upward from the baseline and
+            # keep the highest zip that exists.
+            ver="$BASELINE"
+            for cand in $(seq "$BASELINE" $((BASELINE + 150))); do
+              if curl -sfI --max-time 10 "https://terraria.org/api/download/pc-dedicated-server/terraria-server-${cand}.zip" >/dev/null; then
+                ver="$cand"
+              fi
+            done
           fi
-          [ -n "$ver" ] || { echo "could not resolve version" >&2; exit 1; }
+          # Final existence check (also validates a manually-pinned input).
+          curl -sfI --max-time 15 "https://terraria.org/api/download/pc-dedicated-server/terraria-server-${ver}.zip" >/dev/null \
+            || { echo "server zip for $ver not found" >&2; exit 1; }
           # dotted form for the tag: 1456 -> 1.4.5.6
           dotted="$(echo "$ver" | sed 's/./&./g;s/\.$//')"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
